@@ -25,8 +25,9 @@ int maxIteration = 100;
 double differentialH = 1e-3;
 double initialDelta = 1;
 double deltaThreshold = 1;
-double ndiv, vStart, vEnd, initialResistivity, vGamma, hGamma;
+double ndiv, vStart, vEnd, initialResistivityValue, vGamma, hGamma;
 double lambda = 2e-4;
+std::string initialResistivity;
 
 double factor;
 int numParameter;
@@ -41,44 +42,69 @@ std::vector<std::vector<double>> appResVec;
 std::vector<std::vector<double>> phaseWeightVec;
 std::vector<std::vector<double>> phaseVec;
 
+std::vector<std::vector<double>> observedAppResVec;
+std::vector<std::vector<double>> observedPhaseVec;
+std::vector<std::vector<double>> observedAppResWeightVec;
+std::vector<std::vector<double>> observedPhaseWeightVec;
+
 // Model data
 std::vector<double> depthVector;
 std::vector<double> thicknessVector;
 
 // Calculated data
-std::vector<double> resistivityVector;
 std::vector<std::vector<double>> resistivityVectorAll;
-std::vector<double> apparentResistivityVector;
-std::vector<double> phaseVector;
+std::vector<std::vector<double>> apparentResistivityVector;
+std::vector<std::vector<double>> phaseVector;
+std::vector<std::vector<double>> residualApparentResistivityVector;
+std::vector<std::vector<double>> residualPhaseVector;
 std::vector<std::complex<double>> impedanceVector;
 
 std::vector<double> rmsVec;
 
 double delta(1);
+int errCount(0);
 
 double xlimMin, xlimMax, ylimMin, ylimMax;
 
+std::string strBuf;
 
+
+// Resistivity to Log Resistivity
 double res2logRes(double resistivity) {
 	return std::log10(resistivity);
 }
 
 
+// Log Resistivity to Resistivity
 double logRes2res(double logResistivity) {
 	return std::pow(10, logResistivity);
 }
 
 
+// Degree to Radian
 double deg2rad(double degree) {
 	return degree * PI / 180;
 }
 
 
+// Radian to Degree
 double rad2deg(double radian) {
 	return radian * 180 / PI;
 }
 
 
+// Check decimal
+bool checkDecimal (std::string str) {
+	try {
+		std::stod(str);
+		return true;
+	} catch (const std::invalid_argument& e) {
+		return false;
+	}
+}
+
+
+// Phase unwrapping
 std::vector<double> unwrapPhase(std::vector<double> phaseVector) {
 	if (phaseVector.empty()) {
 		return {};
@@ -89,9 +115,9 @@ std::vector<double> unwrapPhase(std::vector<double> phaseVector) {
 	for (size_t i = 1 ; i < unwrappedPhase.size() ; i++) {
 		double diff = unwrappedPhase[i] - unwrappedPhase[i - 1];
 
-		if (diff > 0.5 * PI && diff < 0.8 * 2 * PI) {
+		if (diff > 0.7 * PI && diff < 0.8 * 2 * PI) {
 			unwrappedPhase[i] -= PI;
-		} else if (diff < -0.5 * PI && diff > -0.8 * 2 * PI) {
+		} else if (diff < -0.7 * PI && diff > -0.8 * 2 * PI) {
 			unwrappedPhase[i] += PI;
 		}
 	}
@@ -100,7 +126,8 @@ std::vector<double> unwrapPhase(std::vector<double> phaseVector) {
 }
 
 
-std::tuple<std::string, double, double, double, double, double, double, double, double, double, double> readParameter(std::string paramFile) {
+// Read parameters
+std::tuple<std::string, double, double, double, double, double, double, std::string, double, double, double> readParameter(std::string paramFile) {
 
 	std::cout << "Read parameters from '" << paramFile << "' ." << std::endl;
 
@@ -114,6 +141,7 @@ std::tuple<std::string, double, double, double, double, double, double, double, 
 }
 
 
+// Read observed data
 std::tuple<int, std::vector<int>, std::vector<double>, std::vector<std::vector<double>>, std::vector<std::vector<double>>, std::vector<std::vector<double>>, std::vector<std::vector<double>>, std::vector<std::vector<double>>> readData (std::string dataFile) {
 
 	std::cout << "Read data from '" << dataFile << "' ." << std::endl;
@@ -161,7 +189,7 @@ std::tuple<int, std::vector<int>, std::vector<double>, std::vector<std::vector<d
 
 		}
 
-		phaseVec[i] = unwrapPhase(phaseVec[i]);
+//		phaseVec[i] = unwrapPhase(phaseVec[i]);
 
 	}
 
@@ -187,9 +215,81 @@ std::tuple<int, std::vector<int>, std::vector<double>, std::vector<std::vector<d
 }
 
 
-std::tuple<std::vector<double>, std::vector<double>> forwardCalc(std::vector<double> freqVec, std::vector<double> resistivityVector, std::vector<double> thicknessVector) {
+std::vector<std::vector<double>> setInitialResistivity(std::string initialResistivity) {
 
-//	std::cout << "Forward calculation" << std::endl;
+	std::cout << "Set initial resistivity: ";
+
+	if (checkDecimal(initialResistivity)) {
+
+		initialResistivityValue = stoi(initialResistivity);
+
+		std::cout << initialResistivityValue << " Ohm-m." << std::endl << std::endl;
+
+		for (int i = 0 ; i < numStation ; i++) {
+			resistivityVectorAll[i].resize(numParameter);
+			for (int j = 0 ; j < numParameter ; j++) {
+				resistivityVectorAll[i][j] = res2logRes(initialResistivityValue);
+			}
+		}
+
+	} else {
+		std::ifstream ifs(initialResistivity.c_str(), std::ios::in);
+		int numResisLayer;
+		ifs >> numResisLayer;
+		std::vector<double> resisValue(numResisLayer), resisThickness(numResisLayer-1);
+		if (numResisLayer == 1) {
+			// Read resistivity settings
+			ifs >> strBuf;
+			resisValue[0] = stod(strBuf);
+			// Apply initial resistivity
+			for (int i = 0 ; i < numStation ; i++) {
+				resistivityVectorAll[i].resize(numParameter);
+				for (int j = 0 ; j < numParameter ; j++) {
+					resistivityVectorAll[i][j] = res2logRes(resisValue[0]);
+				}
+			}
+		} else if (numResisLayer > 1) {
+			// Read resistivity settings
+			for (int i = 0 ; i < numResisLayer - 1 ; i++) {
+				ifs >> resisValue[i] >> resisThickness[i];
+			}
+			ifs >> resisValue[numResisLayer - 1];
+			// Apply initial resistivity
+			for (int i = 0 ; i < numStation ; i++) {
+				resistivityVectorAll[i].resize(numParameter);
+				for (int j = 0 ; j < numParameter ; j++) {
+					double resisDepthBuf(0);
+					for (int k = 0 ; k < numResisLayer - 1 ; k++) {
+						resisDepthBuf += resisThickness[k];
+						if (depthVector[j] <= resisDepthBuf && depthVector[j] > resisDepthBuf - resisThickness[k]) {
+							resistivityVectorAll[i][j] = res2logRes(resisValue[k]);
+						} else if (depthVector[j] > resisDepthBuf){
+							resistivityVectorAll[i][j] = res2logRes(resisValue[numResisLayer - 1]);
+						}
+					}
+				}
+			}
+		} else {
+			std::cerr << "Error: Number of layers not appropriate ." << std::endl;
+		}
+	}
+
+	return resistivityVectorAll;
+
+}
+
+
+// Forward calculation
+std::tuple<std::vector<double>, std::vector<double>> forwardCalc(std::vector<double> freqVec, std::vector<double> logResistivityVector, std::vector<double> thicknessVector) {
+
+	std::vector<double> calculatedApparentResistivityVector(freqVec.size());
+	std::vector<double> calculatedPhaseVector(freqVec.size());
+
+	std::vector<double> resistivityVector(logResistivityVector.size());
+
+	for (size_t i = 0 ; i < logResistivityVector.size() ; i++) {
+		resistivityVector[i] = logRes2res(logResistivityVector[i]);
+	}
 
 	int numLayer = resistivityVector.size();
 
@@ -202,7 +302,6 @@ std::tuple<std::vector<double>, std::vector<double>> forwardCalc(std::vector<dou
 
 	for (int i = 0 ; i < static_cast<int>(freqVec.size()) ; i++) {
 
-//		std::cout << " FREQUENCY = " << freqVec[i] << std::endl;
 		double OMEGA = 2 * PI * freqVec[i];
 
 		impedanceVector[numLayer - 1] = std::sqrt(OMEGA * MU * resistivityVector[numLayer - 1] * imaginaryUnit);
@@ -227,30 +326,244 @@ std::tuple<std::vector<double>, std::vector<double>> forwardCalc(std::vector<dou
 
 		}
 
-//		std::cout << "impedanceVector[0] = " << impedanceVector[0] << std::endl;
-//		std::cout << "abs(impedanceVector[0]) = " << std::abs(impedanceVector[0]) << std::endl;
-//		std::cout << "abs(impedanceVector[0])^2 = " << std::abs(impedanceVector[0]) * std::abs(impedanceVector[0]) << std::endl;
-//		std::cout << "OMEGA * MU = " << OMEGA * MU << std::endl;
-//		std::cout << "(abs(impedanceVector[0])^2) / (OMEGA * MU) = " << (std::abs(impedanceVector[0]) * std::abs(impedanceVector[0])) / (OMEGA * MU) << std::endl;
-
 		apparentResistivityBuf = std::log10((std::abs(impedanceVector[0]) * std::abs(impedanceVector[0])) / (OMEGA * MU));
 		phaseBuf               = std::atan2(impedanceVector[0].imag(), impedanceVector[0].real());
 
-		apparentResistivityVector[i] = apparentResistivityBuf;
-		phaseVector[i]               = phaseBuf;
-
-//		std::cout << "apparentResistivityVector[" << i << "] = " << apparentResistivityVector[i] << std::endl;
-//		std::cout << "phaseVector[" << i << "] = " << phaseVector[i] << std::endl;
-		
-//		std::cout << std::endl;
+		calculatedApparentResistivityVector[i] = apparentResistivityBuf;
+		calculatedPhaseVector[i]               = phaseBuf;
 
 	}
 
-	return std::make_tuple(apparentResistivityVector, phaseVector);
+	return std::make_tuple(calculatedApparentResistivityVector, calculatedPhaseVector);
 
 }
 
 
+// Apparent Resistivity and Phase calculation
+std::tuple<std::vector<std::vector<double>>, std::vector<std::vector<double>>, std::vector<std::vector<double>>, std::vector<std::vector<double>>> calcApparentResistivityAndPhase(std::vector<std::vector<double>> appResVector, std::vector<std::vector<double>> phsVector, std::vector<std::vector<double>> residualAppResVector, std::vector<std::vector<double>> residualPhsVector, std::vector<std::vector<double>> resisVector) {
+	
+	std::vector<double> apparentResistivityVectorBufVector, phaseVectorBufVector;
+
+	sumNumData = 0;
+
+	for (int i = 0 ; i < numStation ; i++) {
+
+		std::cout << " Station No. " << i+1 << std::endl;
+
+		auto [apparentResistivityVectorBufVector, phaseVectorBufVector] = forwardCalc(freqVec[i], resisVector[i], thicknessVector);
+
+		sumNumData += numDataVec[i];
+		
+		std::vector<double> residualApparentResistivityVectorBufVector(numDataVec[i]), residualPhaseVectorBufVector(numDataVec[i]);
+
+		for (int j = 0 ; j < numDataVec[i] ; j++) {
+			
+			residualApparentResistivityVectorBufVector[j] = (observedAppResVec[i][j] - apparentResistivityVectorBufVector[j]) * std::sqrt(observedAppResWeightVec[i][j]);
+			residualPhaseVectorBufVector[j]               = (observedPhaseVec[i][j]  - phaseVectorBufVector[j]              ) * std::sqrt(observedPhaseWeightVec[i][j]) ;
+		}
+
+		appResVector[i]         = apparentResistivityVectorBufVector;
+		phsVector[i]            = phaseVectorBufVector;
+		residualAppResVector[i] = residualApparentResistivityVectorBufVector;
+		residualPhsVector[i]    = residualPhaseVectorBufVector;
+
+	}
+
+	return std::make_tuple(appResVector, phsVector, residualAppResVector, residualPhsVector);
+
+}
+
+
+// Objective Function culculation
+double calcObjectiveFunction(std::vector<std::vector<double>> residualAppResVector, std::vector<std::vector<double>> residualPhsVector) {
+
+	double objectiveFunctionBuf(0);
+
+	for (int i = 0 ; i < numStation ; i++) {
+		for (int j = 0 ; j < numDataVec[i] ; j++) {
+			objectiveFunctionBuf += std::pow(residualAppResVector[i][j], 2) + std::pow(residualPhsVector[i][j], 2);
+		}
+	}
+
+	std::cout << "  Objective Function = " << objectiveFunctionBuf << std::endl;
+
+	return objectiveFunctionBuf;
+
+}
+
+
+// RMS calculation
+std::vector<double> calcRMS(std::vector<double> rmsVec, double objectiveFunction) {
+
+	rmsVec.push_back(std::sqrt(objectiveFunction / (2 * sumNumData)));
+
+	std::cout << "  RMS                = " << std::sqrt(objectiveFunction / (2 * sumNumData)) << std::endl;
+
+	return rmsVec;
+
+}
+
+
+// Construct Jacobian A
+Eigen::MatrixXd constructJacobian(Eigen::MatrixXd A, std::vector<std::vector<double>> apparentResistivityVector, std::vector<std::vector<double>> phaseVector) {
+
+	std::cout << "  Construct Jacobian" << std::endl;
+
+	int numDataBuf(0), numParameterBuf(0);
+
+	for (int i = 0 ; i < numStation ; i++) {
+
+		for (int j = 0 ; j < numParameter ; j++) {
+
+			double resistivityBuf = resistivityVectorAll[i][j];
+			resistivityVectorAll[i][j] = resistivityBuf + differentialH;
+			auto [apparentResistivityVectorBufVector, phaseVectorBufVector] = forwardCalc(freqVec[i], resistivityVectorAll[i], thicknessVector);
+
+			for (int k = 0 ; k < numDataVec[i] ; k++) {
+				A(k + numDataBuf                , j + numParameterBuf) = (apparentResistivityVectorBufVector[k] - apparentResistivityVector[i][k]) / differentialH * std::sqrt(observedAppResWeightVec[i][k]);
+				A(k + numDataBuf + numDataVec[i], j + numParameterBuf) = (phaseVectorBufVector[k]               - phaseVector[i][k]              ) / differentialH * std::sqrt(observedPhaseWeightVec[i][k] );
+			}
+
+			resistivityVectorAll[i][j] = resistivityBuf;
+
+		}
+		numDataBuf += 2 * numDataVec[i];
+		numParameterBuf += numParameter;
+	}
+
+	return A;
+
+}
+
+
+// Construct Roughning Matrix C
+Eigen::MatrixXd constructRoughningMatrix(Eigen::MatrixXd C) {
+
+	std::cout << "  Construct Roughning Matrix" << std::endl;
+
+	int numParameterBuf(0);
+
+	for (int i = 0 ; i < numStation ; i++) {
+		for (int j = 0 ; j < numParameter ; j++) {
+
+			// R1 (Vertical Smoothing)
+			if (j != 0) {
+				C(j + numParameterBuf, j + numParameterBuf    ) +=      std::sqrt(vGamma);
+				C(j + numParameterBuf, j + numParameterBuf - 1) += -1 * std::sqrt(vGamma);
+			}
+
+			// R2 (Horizontal Smoothing)
+			if (numStation > 1) {
+				if (i == 0) {
+					C(j + numParameterBuf, j + numParameterBuf               ) +=      std::sqrt(hGamma);
+					C(j + numParameterBuf, j + numParameterBuf + numParameter) += -1 * std::sqrt(hGamma);
+				} else if (i == numStation - 1) {
+					C(j + numParameterBuf, j + numParameterBuf               ) +=      std::sqrt(hGamma);
+					C(j + numParameterBuf, j + numParameterBuf - numParameter) += -1 * std::sqrt(hGamma);
+				} else {
+					C(j + numParameterBuf, j + numParameterBuf               ) +=  2 * std::sqrt(hGamma);
+					C(j + numParameterBuf, j + numParameterBuf - numParameter) += -1 * std::sqrt(hGamma);
+					C(j + numParameterBuf, j + numParameterBuf + numParameter) += -1 * std::sqrt(hGamma);
+				}
+			}
+
+		}
+		numParameterBuf += numParameter;
+	}
+
+	return C;
+
+}
+
+
+// Construct Residual Vector B
+Eigen::VectorXd constructResidualVector(Eigen::VectorXd B, std::vector<std::vector<double>> residualApparentResistivityVector, std::vector<std::vector<double>> residualPhaseVector) {
+
+	std::cout << "  Construct Residual Vector" << std::endl;
+
+	int numDataBuf(0);
+
+	std::vector<double> numDataVecBuf(numDataVec.begin(), numDataVec.end());
+	numDataVecBuf.insert(numDataVecBuf.begin(), 0.0);
+
+	for (int i = 0 ; i < numStation ; i++) {
+
+		numDataBuf += 2 * numDataVecBuf[i];
+
+		for (int j = 0 ; j < numDataVec[i] ; j++) {
+			B(j + numDataBuf                ) = residualApparentResistivityVector[i][j];
+			B(j + numDataBuf + numDataVec[i]) = residualPhaseVector[i][j];
+		}
+
+	}
+
+	return B;
+
+}
+
+
+// Nonlinear Least Squares Method
+std::vector<std::vector<double>> calcNewResistivity(Eigen::MatrixXd A, Eigen::MatrixXd B, Eigen::MatrixXd C, std::vector<std::vector<double>> resistivityVectorAllBuf) {
+
+	Eigen::MatrixXd C5 = lambda * C;
+	Eigen::MatrixXd AandC5(A.rows() + C5.rows(), A.cols());
+	AandC5 << A, C5;
+
+	Eigen::VectorXd H = Eigen::VectorXd::Zero(numParameter * numStation);
+	Eigen::VectorXd BandH(B.size() + H.size());
+	BandH << B, H;
+
+	// Cholesky分解
+//	Eigen::MatrixXd AtA = AandC5.transpose() * AandC5;
+//	Eigen::VectorXd Atb = AandC5.transpose() * BandH;
+//	Eigen::VectorXd dxCholesky = AtA.ldlt().solve(Atb);
+
+	// QR分解
+//	Eigen::VectorXd dxQr = AandC5.colPivHouseholderQr().solve(BandH);
+
+	// SVD
+	Eigen::VectorXd dxSvd = AandC5.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(BandH);
+
+	for (int i = 0 ; i < numStation ; i++) {
+
+		auto segment = dxSvd.segment(i * numParameter, numParameter);
+		std::vector<double> updatedResistivity(numParameter);
+
+		for (int j = 0 ; j < numParameter ; j++) {
+			updatedResistivity[j] = resistivityVectorAll[i][j] + segment(j);
+		}
+
+		resistivityVectorAllBuf[i] = updatedResistivity;
+
+	}
+
+	return resistivityVectorAllBuf;
+
+}
+
+
+// Calculating Delta
+double calcDelta(std::vector<std::vector<double>> newAppResVector, std::vector<std::vector<double>> newPhsVector, std::vector<std::vector<double>> beforeAppResVector, std::vector<std::vector<double>> beforePhsVector) {
+	double abf(0), abdf(0);
+
+	for (int i = 0 ; i < numStation ; i++) {
+		for (int j = 0 ; j < numDataVec[i] ; j++) {
+			abf  += std::abs(newAppResVector[i][j]                           ) + std::abs(newPhsVector[i][j]);
+			abdf += std::abs(beforeAppResVector[i][j] - newAppResVector[i][j]) + std::abs(beforePhsVector[i][j] - newPhsVector[i][j]);
+		}
+	}
+
+	delta = abdf / abf;
+
+	std::cout << "  Delta              = " << delta << std::endl;
+	std::cout << "  (ThresholdDelta    = " << deltaThreshold << ")" << std::endl;
+
+	return delta;
+
+}
+
+
+// Draw sounding curves
 void drawSoundingCurve(std::string dataType, std::string dataUnit, std::vector<double> freq, std::vector<double> calculatedData, std::vector<double> observedData, double xlimMin, double xlimMax, double ylimMin, double ylimMax, int stationNumber, std::string outputDirectoryName){
 
 	std::string figTitle = outputDirectoryName + dataType + "_" + std::to_string(stationNumber+1)+".png";
@@ -281,6 +594,7 @@ void drawSoundingCurve(std::string dataType, std::string dataUnit, std::vector<d
 }
 
  
+// Draw 2D sections
 void draw2DSection(std::vector<std::vector<double>> resistivityVector, std::vector<double> depthVector, std::vector<double> distanceVector, int numStation, int numParameter, std::string outputDirectoryName) {
 
 	std::string outfileTitle = "outputDataForGnuplot.txt";
@@ -291,19 +605,11 @@ void draw2DSection(std::vector<std::vector<double>> resistivityVector, std::vect
 		return;
 	}
 
-//	outfile << "# Station_ID  Depth(km)  log10_Resistivity" << std::endl;
-//
-//	for (int i = 0 ; i < numStation ; i++) {
-//		for (int j = 0 ; j < numParameter ; j++) {
-//			outfile << (i + 1) << " " << depthVector[j] << " " << res2logRes(resistivityVector[i][j]) << std::endl;
-//		}
-//	}
-
 	outfile << "# Distance(km)  Depth(km)  log10_Resistivity" << std::endl;
 
 	for (int i = 0 ; i < numStation ; i++) {
 		for (int j = 0 ; j < numParameter ; j++) {
-			outfile << distanceVector[i] << " " << depthVector[j] << " " << res2logRes(resistivityVector[i][j]) << std::endl;
+			outfile << distanceVector[i] << " " << depthVector[j] << " " << resistivityVector[i][j] << std::endl;
 		}
 	}
 
@@ -318,18 +624,17 @@ int main () {
 	auto [dataFile, maxIteration, differentialH, deltaThreshold, ndiv, vStart, vEnd, initialResistivity, vGamma, hGamma, lambda] = readParameter("param.dat");
 
 	// Read data
-	auto [numStation, numDataVec, distanceVec, freqVec, observedAppResWeightVec, observedAppResVec, observedPhaseWeightVec, observedPhaseVec] = readData(dataFile);
+	std::tie (numStation, numDataVec, distanceVec, freqVec, observedAppResWeightVec, observedAppResVec, observedPhaseWeightVec, observedPhaseVec) = readData(dataFile);
 
-	// Set initial parameters
+	// Set initial parameters/options
 	std::cout << "Initial parameters" << std::endl;
-	factor = std::pow(10, 1/ndiv);
+	factor = std::pow(10, 1.0/ndiv);
 	std::cout << " factor = " << factor << std::endl;
 	numParameter = (std::log10(vEnd) - std::log10(vStart)) * ndiv + 3;
-	std::cout << " numParameter = " << numParameter << std::endl;
+	std::cout << " numParameter = " << numParameter << std::endl << std::endl;
 	
 	depthVector         .resize(numParameter+1);
 	thicknessVector     .resize(numParameter);
-	resistivityVector   .resize(numParameter);
 	resistivityVectorAll.resize(numStation);
 
 	depthVector[0]     = vStart;
@@ -340,236 +645,66 @@ int main () {
 		thicknessVector[i]  = depthVector[i] - depthVector[i-1];
 	}
 
-	for (int i = 0 ; i < numParameter ; i++) {
-		resistivityVector[i] = initialResistivity;
-	}
-
-	for (int i = 0 ; i < numStation ; i++) {
-		resistivityVectorAll[i] = resistivityVector;
-	}
+	// Set initial resistivity
+	resistivityVectorAll = setInitialResistivity(initialResistivity);
 
 	depthVector[numParameter] = depthVector[numParameter-1] * 1.1;
 
 	// Calculate data
 	std::vector<std::vector<double>> apparentResistivityVector(numStation), phaseVector(numStation);
-	std::vector<double> apparentResistivityVectorBufVector, phaseVectorBufVector;
 	std::vector<std::vector<double>> residualApparentResistivityVector(numStation), residualPhaseVector(numStation);
 
-	double objectiveFunction(0);
+	std::tie(apparentResistivityVector, phaseVector, residualApparentResistivityVector, residualPhaseVector) = calcApparentResistivityAndPhase(apparentResistivityVector, phaseVector, residualApparentResistivityVector, residualPhaseVector, resistivityVectorAll);
+
 //	double residualBuf(0);
 
-	for (int i = 0 ; i < numStation ; i++) {
+	double objectiveFunction(0);
+	objectiveFunction = calcObjectiveFunction(residualApparentResistivityVector, residualPhaseVector);
 
-		std::cout << " Station No. " << i+1 << std::endl;
-
-		auto [apparentResistivityVectorBufVector, phaseVectorBufVector] = forwardCalc(freqVec[i], resistivityVector, thicknessVector);
-
-//		phaseVectorBufVector = unwrapPhase(phaseVectorBufVector);
-
-		sumNumData += numDataVec[i];
-		std::cout << "  sumNumData = " << sumNumData << std::endl;
-		
-		std::vector<double> residualApparentResistivityVectorBufVector(numDataVec[i]), residualPhaseVectorBufVector(numDataVec[i]);
-
-		for (int j = 0 ; j < numDataVec[i] ; j++) {
-			
-			std::cout << "  Data No. " << j << std::endl;
-//			std::cout << "   observedAppResVec[" << i << "][" << j << "] = " << observedAppResVec[i][j] << std::endl;
-//			std::cout << "   observedAppResWeightVec[" << i << "][" << j << "] = " << observedAppResWeightVec[i][j] << std::endl;
-//			std::cout << "   apparentResistivityVectorBufVector[" << j << "] = " << apparentResistivityVectorBufVector[j] << std::endl;
-			
-			residualApparentResistivityVectorBufVector[j] = (observedAppResVec[i][j] - apparentResistivityVectorBufVector[j]) * std::sqrt(observedAppResWeightVec[i][j]);
-//			std::cout << "   residualApparentResistivityVectorBufVector[" << j << "] = " << residualApparentResistivityVectorBufVector[j] << std::endl;
-			residualPhaseVectorBufVector[j]               = (observedPhaseVec[i][j]  - phaseVectorBufVector[j]              ) * std::sqrt(observedPhaseWeightVec[i][j]) ;
-//			std::cout << "   residualPhaseVectorBufVector[" << j << "] = " << residualPhaseVectorBufVector[j] << std::endl;
-//			residualBuf += std::pow(residualApparentResistivityVectorBufVector[j], 2) + std::pow(residualPhaseVectorBufVector[j], 2);
-//			std::cout << "   residualBuf = " << residualBuf << std::endl;
-//			objectiveFunction += std::pow(residualApparentResistivityVectorBufVector[j], 2) + residualApparentResistivityVectorBufVector[j] * residualPhaseVectorBufVector[j];
-			objectiveFunction += std::pow(residualApparentResistivityVectorBufVector[j], 2) + std::pow(residualPhaseVectorBufVector[j], 2);
-//			std::cout << "   objectiveFunction = " << objectiveFunction << std::endl;
-		}
-
-		apparentResistivityVector[i]         = apparentResistivityVectorBufVector;
-		phaseVector[i]                       = phaseVectorBufVector;
-		residualApparentResistivityVector[i] = residualApparentResistivityVectorBufVector;
-		residualPhaseVector[i]               = residualPhaseVectorBufVector;
-
-	}
-
-//	rmsVec.push_back(std::sqrt(residualBuf / (2 * sumNumData)));
-	rmsVec.push_back(std::sqrt(objectiveFunction / (2 * sumNumData)));
-
-	std::cout << " Initial RMS                = " << rmsVec[0]         << std::endl;
-	std::cout << " Initial Objective Function = " << objectiveFunction << std::endl;
+	rmsVec = calcRMS(rmsVec, objectiveFunction);
 
 	std::cout << std::endl;
 
-	int successfulIter(0);
-	while (successfulIter < maxIteration) {
-		std::cout << "\n<-- Iteration: " << successfulIter + 1 << " -->" << std::endl;
+	int iter(0);
+	while (delta >= deltaThreshold) {
+
+		if (iter >= maxIteration) {
+			std::cout << " STATUS: Iteration number reached the threshold." << std::endl;
+			break;
+		}
+
+		std::cout << "\n<-- Iteration: " << iter + 1 << " -->" << std::endl;
 		std::cout << "  Current lambda: " << lambda << std::endl;
 
 		// Calculate Jacobian
 		Eigen::MatrixXd A = Eigen::MatrixXd::Zero(sumNumData * 2, numParameter * numStation);
-
-		int numDataBuf(0), numParameterBuf(0);
-
-		for (int i = 0 ; i < numStation ; i++) {
-			
-			for (int j = 0 ; j < numParameter ; j++) {
-
-				double resistivityBuf = resistivityVectorAll[i][j];
-				resistivityVectorAll[i][j] = resistivityBuf + differentialH;
-				auto [apparentResistivityVectorBufVector, phaseVectorBufVector] = forwardCalc(freqVec[i], resistivityVectorAll[i], thicknessVector);
-
-				for (int k = 0 ; k < numDataVec[i] ; k++) {
-
-					A(k + numDataBuf                , j + numParameterBuf) = (apparentResistivityVectorBufVector[k] - apparentResistivityVector[i][k]) / differentialH * std::sqrt(observedAppResWeightVec[i][k]);
-					A(k + numDataBuf + numDataVec[i], j + numParameterBuf) = (phaseVectorBufVector[k]               - phaseVector[i][k]              ) / differentialH * std::sqrt(observedPhaseWeightVec[i][k]);
-
-				}
-
-				resistivityVectorAll[i][j] = resistivityBuf;
-
-			}
-
-			numDataBuf += 2 * numDataVec[i];
-			numParameterBuf += numParameter;
-
-		}
+		A = constructJacobian(A, apparentResistivityVector, phaseVector);
 
 		// Construct Roughness Matrix C
 		Eigen::MatrixXd C = Eigen::MatrixXd::Zero(numParameter * numStation, numParameter * numStation);
-
-		numDataBuf = 0;
-		numParameterBuf = 0;
-
-		for (int i = 0 ; i < numStation ; i++) {
-
-			for (int j = 0 ; j < numParameter ; j++) {
-
-				// R1 (Vertical Smoothing)
-				if (j != 0) {
-					C(j + numParameterBuf, j + numParameterBuf    ) +=      std::sqrt(vGamma);
-					C(j + numParameterBuf, j + numParameterBuf - 1) += -1 * std::sqrt(vGamma);
-				}
-
-				// R2 (Horizontal Smoothing)
-				if (i == 0) {
-					C(j + numParameterBuf, j + numParameterBuf               ) +=      std::sqrt(hGamma);
-					C(j + numParameterBuf, j + numParameterBuf + numParameter) += -1 * std::sqrt(hGamma);
-				} else if (i == numStation - 1) {
-					C(j + numParameterBuf, j + numParameterBuf               ) +=      std::sqrt(hGamma);
-					C(j + numParameterBuf, j + numParameterBuf - numParameter) += -1 * std::sqrt(hGamma);
-				} else {
-					C(j + numParameterBuf, j + numParameterBuf               ) +=  2 * std::sqrt(hGamma);
-					C(j + numParameterBuf, j + numParameterBuf - numParameter) += -1 * std::sqrt(hGamma);
-					C(j + numParameterBuf, j + numParameterBuf + numParameter) += -1 * std::sqrt(hGamma);
-				}
-
-			}
-
-			numParameterBuf += numParameter;
-
-		}
-
-		numParameterBuf = 0;
+		C = constructRoughningMatrix(C);
 
 		// Construct Residual Vector B
-		Eigen::MatrixXd B = Eigen::VectorXd::Zero(sumNumData * 2);
-
-		std::vector<double> numDataVecBuf(numDataVec.begin(), numDataVec.end());
-		numDataVecBuf.insert(numDataVecBuf.begin(), 0.0);
-
-		for (int i = 0 ; i < numStation ; i++) {
-
-			numDataBuf += 2 * numDataVecBuf[i];
-
-			for (int j = 0 ; j < numDataVec[i] ; j++) {
-
-//				std::cout << "i = " << i << "  j = " << j << std::endl;
-				B(j + numDataBuf                ) = residualApparentResistivityVector[i][j];
-				B(j + numDataBuf + numDataVec[i]) = residualPhaseVector[i][j];
-
-			}
-
-		}
-
-		numDataBuf = 0;
+		Eigen::VectorXd B = Eigen::VectorXd::Zero(sumNumData * 2);
+		B = constructResidualVector(B, residualApparentResistivityVector, residualPhaseVector);
 
 		// Nonlilnlear Least Squares Method
-		Eigen::MatrixXd C5 = lambda * C;
-		Eigen::MatrixXd AandC5(A.rows() + C5.rows(), A.cols());
-		AandC5 << A, C5;
-
-		Eigen::VectorXd H = Eigen::VectorXd::Zero(numParameter * numStation);
-		Eigen::VectorXd BandH(B.size() + H.size());
-		BandH << B, H;
-
-		// Cholesky分解
-//		Eigen::MatrixXd AtA = AandC5.transpose() * AandC5;
-//		Eigen::VectorXd Atb = AandC5.transpose() * BandH;
-//		Eigen::VectorXd dxCholesky = AtA.ldlt().solve(Atb);
-
-		// QR分解
-//		Eigen::VectorXd dxQr = AandC5.colPivHouseholderQr().solve(BandH);
-
-		// SVD分解
-		Eigen::VectorXd dxSvd = AandC5.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(BandH);
-
-		// Calculate new data
 		std::vector<std::vector<double>> resistivityVectorAllBuf(numStation);
-
-		for (int i = 0 ; i < numStation ; i++) {
-
-			auto segment = dxSvd.segment(i * numParameter, numParameter);
-			std::vector<double> updatedResistivity(numParameter);
-			
-			for (int j = 0 ; j < numParameter ; j++) {
-
-				updatedResistivity[j] = resistivityVectorAll[i][j] + segment(j);
-
-			}
-
-			resistivityVectorAllBuf[i] = updatedResistivity;
-
-		}
+		resistivityVectorAllBuf = calcNewResistivity(A, B, C, resistivityVectorAllBuf);
 
 		// Calculate new objective function
 		std::vector<std::vector<double>> newApparentResistivityVector(numStation), newPhaseVector(numStation), newResidualApparentResistivityVector(numStation), newResidualPhaseVector(numStation);
+
+		std::tie(newApparentResistivityVector, newPhaseVector, newResidualApparentResistivityVector, newResidualPhaseVector) = calcApparentResistivityAndPhase(newApparentResistivityVector, newPhaseVector, newResidualApparentResistivityVector, newResidualPhaseVector, resistivityVectorAllBuf);
+
 		double beforeObjectiveFunction = objectiveFunction;
-		objectiveFunction = 0;
-
-		for (int i = 0 ; i < numStation ; i++) {
-
-			auto [apparentResistivityVectorBufVector, phaseVectorBufVector] = forwardCalc(freqVec[i], resistivityVectorAllBuf[i], thicknessVector);
-
-//			phaseVectorBufVector = unwrapPhase(phaseVectorBufVector);
-
-			std::vector<double> residualApparentResistivityVectorBufVector(numDataVec[i]), residualPhaseVectorBufVector(numDataVec[i]);
-
-			for (int j = 0 ; j < numDataVec[i] ; j++) {
-
-				residualApparentResistivityVectorBufVector[j] = (observedAppResVec[i][j] - apparentResistivityVectorBufVector[j]) * std::sqrt(observedAppResWeightVec[i][j]);
-				residualPhaseVectorBufVector[j]               = (observedPhaseVec[i][j]  - phaseVectorBufVector[j]              ) * std::sqrt(observedPhaseWeightVec[i][j]) ;
-//				residualBuf += residualApparentResistivityVectorBufVector[j] + residualPhaseVectorBufVector[j];
-				objectiveFunction += std::pow(residualApparentResistivityVectorBufVector[j], 2) + std::pow(residualPhaseVectorBufVector[j], 2);
-
-			}
-
-			newApparentResistivityVector[i]         = apparentResistivityVectorBufVector;
-			newPhaseVector[i]                       = phaseVectorBufVector;
-			newResidualApparentResistivityVector[i] = residualApparentResistivityVectorBufVector;
-			newResidualPhaseVector[i]               = residualPhaseVectorBufVector;
-
-		}
+		objectiveFunction = calcObjectiveFunction(newResidualApparentResistivityVector, newResidualPhaseVector);
 
 		// Check convergence
 		if (objectiveFunction < beforeObjectiveFunction) {
 
-			std::cout << "  STATUS: SUCCESS - Objective function improved - " << beforeObjectiveFunction << " --> " << objectiveFunction << std::endl;
-			successfulIter++;
-			lambda *= 0.5; // Decrease lambda
+			std::cout << " STATUS: SUCCESS - Objective function improved - " << beforeObjectiveFunction << " --> " << objectiveFunction << std::endl;
+			iter++;
 
 			// Update model
 			resistivityVectorAll              = resistivityVectorAllBuf;
@@ -585,314 +720,24 @@ int main () {
 			residualPhaseVector               = newResidualPhaseVector;
 
 			// Calculate RMS
-			rmsVec.push_back(std::sqrt(objectiveFunction / (2 * sumNumData)));
-			std::cout << "  RMS = " << std::sqrt(objectiveFunction / (2 * sumNumData)) << std::endl;
-			std::cout << "  RMS = " << rmsVec[successfulIter] << std::endl;
+			rmsVec = calcRMS(rmsVec, objectiveFunction);
 
 			// Check delta for final convergence
-			double abf(0), abdf(0);
-			for (int i = 0 ; i < numStation ; i++) {
-				for (int j = 0 ; j < numDataVec[i] ; j++) {
-					abf  += std::abs(newApparentResistivityVector[i][j]) + std::abs(newPhaseVector[i][j]);
-					abdf += std::abs(beforeApparentResistivityVector[i][j] - newApparentResistivityVector[i][j]) + std::abs(beforePhaseVector[i][j] - newPhaseVector[i][j]);
-				}
-			}
-			delta = abdf / abf;
-			std::cout << "  Delta = " << delta << std::endl;
-			std::cout << "  Threshold of Delta = " << deltaThreshold << std::endl;
+			delta = calcDelta(apparentResistivityVector, phaseVector, beforeApparentResistivityVector, beforePhaseVector);
 
 			if (delta <= deltaThreshold) {
-				std::cout << "  STATUS: CONVERGED by delta threshold." << std::endl;
+				std::cout << " STATUS: CONVERGED by delta threshold." << std::endl;
 				break;
 			}
 
 		} else {
-			std::cout << "  STATUS: FAILED - Objective function did not improve (New objective function = " << objectiveFunction << ")" << std::endl;
-			lambda *= 10;  // Increase lambda
-
-			if (lambda > 1e20) {
-				std::cout << "  ERROR: Lambda is too large, stopping inversion" << std::endl;
+			std::cout << " STATUS: FAILED - Objective function did not improve (New objective function = " << objectiveFunction << ")" << std::endl;
+			errCount += 1;
+			if (errCount > 100) {
 				break;
 			}
 		}
 	}
-
-
-//	// Iteration start
-//	for (int iter = 0 ; iter <= maxIteration ; iter++) {
-//
-//		std::cout << "\nIteration: " << iter << std::endl;
-//
-//		// Calculate Jacobian
-////		std::cout << "Calculate Jacobian" << std::endl;
-//		Eigen::MatrixXd A = Eigen::MatrixXd::Zero(sumNumData * 2, numParameter * numStation);
-//		Eigen::MatrixXd B = Eigen::VectorXd::Zero(sumNumData * 2);
-//
-//		int numDataBuf(0), numParameterBuf(0);
-//		double resistivityBuf;
-//
-//		for (int i = 0 ; i < numStation ; i++) {
-//
-//			for (int j = 0 ; j < numParameter ; j++) {
-//
-//				resistivityBuf = resistivityVectorAll[i][j];
-//				resistivityVectorAll[i][j] = resistivityBuf + differentialH;
-//				auto [apparentResistivityVectorBufVector, phaseVectorBufVector] = forwardCalc(freqVec[i], resistivityVectorAll[i], thicknessVector);
-//
-//				for (int k = 0 ; k < numDataVec[i] ; k++) {
-//
-//					A(k + 2 * numDataBuf, j + numParameterBuf) = (apparentResistivityVectorBufVector[k] - apparentResistivityVector[i][k]) / differentialH * std::sqrt(observedAppResWeightVec[i][k]);
-//					A(k + numDataVec[i] + 2 * numDataBuf, j + numParameterBuf) = (phaseVectorBufVector[k] - phaseVector[i][k]) / differentialH * std::sqrt(observedPhaseWeightVec[i][k]);
-//
-//				}
-//			
-//				resistivityVectorAll[i][j] = resistivityBuf;
-//
-//			}
-//
-//			numDataBuf += numDataVec[i];
-//			numParameterBuf += numParameter;
-//
-//		}
-//
-//		Eigen::MatrixXd C = Eigen::MatrixXd::Zero(numParameter * numStation, numParameter * numStation);
-////		std::cout << "numParameter * numStation = " << numParameter * numStation << std::endl;
-//
-//		numDataBuf = 0;
-//		numParameterBuf = 0;
-//
-//		for (int i = 0 ; i < numStation ; i++) {
-//
-//			for (int j = 0 ; j < numParameter ; j++) {
-//
-////				std::cout << "i = " << i << "  j = " << j << std::endl;
-//
-//
-////				// A
-////				if (i == 0 || i == numStation-1) {
-////					if (j == 0) {
-////						C(j + numParameterBuf, j + numParameterBuf) = std::sqrt(hGamma);
-////					}
-////					if (j != 0) {
-////						C(j + numParameterBuf, j + numParameterBuf) = std::sqrt(vGamma) + std::sqrt(hGamma);
-////						C(j + numParameterBuf, j + numParameterBuf - 1) = -1 * std::sqrt(vGamma);
-////					}
-////				}
-////
-////				// B
-////				if (i != 0 && i != numStation-1) {
-////					if (j == 0) {
-////						C(j + numParameterBuf, j + numParameterBuf) = std::sqrt(hGamma);
-////					}
-////					if (j != 0) {
-////						C(j + numParameterBuf, j + numParameterBuf) = std::sqrt(vGamma) + 2 * std::sqrt(hGamma);
-////						C(j + numParameterBuf, j + numParameterBuf - 1) = -1 * std::sqrt(vGamma);
-////					}
-////				}
-////
-////				//C
-////				if (i != 0 && i != numStation-1) {
-////					C(j + numParameterBuf, j + numParameterBuf - numParameter) = -1 * std::sqrt(hGamma);
-////					C(j + numParameterBuf - numParameter, j + numParameterBuf) = -1 * std::sqrt(hGamma);
-////				}
-//
-//				// R1
-//				if (j != 0) {
-//					C(j + numParameterBuf, j + numParameterBuf    ) =      std::sqrt(vGamma);
-//					C(j + numParameterBuf, j + numParameterBuf - 1) = -1 * std::sqrt(vGamma);
-//				}
-//
-//				// R2
-//				if (i == 0) {
-//					C(j + numParameterBuf, j + numParameterBuf               ) =      std::sqrt(hGamma);
-//					C(j + numParameterBuf, j + numParameterBuf + numParameter) = -1 * std::sqrt(hGamma);
-//				} else if (i == numStation - 1) {
-//					C(j + numParameterBuf, j + numParameterBuf               ) =      std::sqrt(hGamma);
-//					C(j + numParameterBuf, j + numParameterBuf - numParameter) = -1 * std::sqrt(hGamma);
-//				} else {
-//					C(j + numParameterBuf, j + numParameterBuf               ) =  2 * std::sqrt(hGamma);
-//					C(j + numParameterBuf, j + numParameterBuf - numParameter) = -1 * std::sqrt(hGamma);
-//					C(j + numParameterBuf, j + numParameterBuf + numParameter) = -1 * std::sqrt(hGamma);
-//				}
-//
-//			}
-//
-//			numParameterBuf += numParameter;
-//
-//		}
-//
-//		numParameterBuf = 0;
-//		std::vector<double> numDataVecBuf(numDataVec.begin(), numDataVec.end());
-//		numDataVecBuf.insert(numDataVecBuf.begin(), 0.0);
-//
-//		for (int i = 0 ; i < numStation ; i++) {
-//
-//			numDataBuf += numDataVecBuf[i] * 2;
-//
-//			for (int j = 0 ; j < numDataVec[i] ; j++) {
-//
-////				std::cout << "i = " << i << "  j = " << j << std::endl;
-//				B(j + numDataBuf) = residualApparentResistivityVector[i][j];
-//				B(j + numDataBuf + numDataVec[i]) = residualPhaseVector[i][j];
-//
-//			}
-//
-//		}
-//
-//		numDataBuf = 0;
-//
-//	// Nonlilnlear least squares method
-//		Eigen::MatrixXd C5 = lambda * C;
-//		Eigen::MatrixXd AandC5(A.rows() + C5.rows(), A.cols());
-//		AandC5 << A, C5;
-//
-//		Eigen::VectorXd H = Eigen::VectorXd::Zero(numParameter * numStation);
-//		Eigen::VectorXd BandH(B.size() + H.size());
-//		BandH << B, H;
-//
-//		// Cholesky分解
-////		Eigen::MatrixXd AtA = AandC5.transpose() * AandC5;
-////		Eigen::VectorXd Atb = AandC5.transpose() * BandH;
-////		Eigen::VectorXd dxCholesky = AtA.ldlt().solve(Atb);
-//
-//		// QR分解
-////		Eigen::VectorXd dxQr = AandC5.colPivHouseholderQr().solve(BandH);
-//
-//		// SVD分解
-//		Eigen::VectorXd dxSvd = AandC5.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(BandH);
-//
-//		// Calculate new data
-//		std::vector<std::vector<double>> beforeApparentResistivityVector = apparentResistivityVector;
-//		std::vector<std::vector<double>> beforePhaseVector = phaseVector;
-//
-//		std::vector<std::vector<double>> resistivityVectorAllBuf(numStation);
-//
-//		for (int i = 0 ; i < numStation ; i++) {
-//
-//			auto segment = dxSvd.segment(i * numParameter, numParameter);
-//			std::vector<double> updatedResistivity(numParameter);
-//			
-//			for (int j = 0 ; j < numParameter ; j++) {
-//
-//				updatedResistivity[j] = resistivityVectorAll[i][j] + segment(j);
-//
-//			}
-//
-//			resistivityVectorAllBuf[i] = updatedResistivity;
-//
-//		}
-//
-//		double beforeObjectiveFunction = objectiveFunction;
-//		objectiveFunction = 0;
-//
-//		for (int i = 0 ; i < numStation ; i++) {
-//
-//			auto [apparentResistivityVectorBufVector, phaseVectorBufVector] = forwardCalc(freqVec[i], resistivityVectorAllBuf[i], thicknessVector);
-//
-//			std::vector<double> residualApparentResistivityVectorBufVector(numDataVec[i]), residualPhaseVectorBufVector(numDataVec[i]);
-//
-//			for (int j = 0 ; j < numDataVec[i] ; j++) {
-//
-//				residualApparentResistivityVectorBufVector[j] = (observedAppResVec[i][j] - apparentResistivityVectorBufVector[j]) * std::sqrt(observedAppResWeightVec[i][j]);
-//				residualPhaseVectorBufVector[j]               = (observedPhaseVec[i][j]  - phaseVectorBufVector[j]              ) * std::sqrt(observedPhaseWeightVec[i][j]) ;
-////				residualBuf += residualApparentResistivityVectorBufVector[j] + residualPhaseVectorBufVector[j];
-//				objectiveFunction += std::pow(residualApparentResistivityVectorBufVector[j], 2) + std::pow(residualPhaseVectorBufVector[j], 2);
-//
-//			}
-//
-//		apparentResistivityVector[i]         = apparentResistivityVectorBufVector;
-//		phaseVector[i]                       = phaseVectorBufVector;
-//		residualApparentResistivityVector[i] = residualApparentResistivityVectorBufVector;
-//		residualPhaseVector[i]               = residualPhaseVectorBufVector;
-//
-//		}
-//
-//		std::cout << "  Objective Function = " << objectiveFunction << std::endl;
-//
-//		}
-//
-//		// Calculate RMS
-//		double res2 = 0;
-//		for (int i = 0 ; i < numStation ; i++) {
-//
-//			std::vector<double> resrho(numDataVec[i]), resphi(numDataVec[i]);
-//
-//			for (int j = 0 ; j < numDataVec[i] ; j++) {
-//
-//				resrho[j] = (observedAppResVec[i][j] - apparentResistivityVector[i][j]) * std::sqrt(observedAppResWeightVec[i][j]);
-//				resphi[j] = (observedPhaseVec[i][j] - phaseVector[i][j]) * std::sqrt(observedPhaseWeightVec[i][j]);
-//				res2 += std::pow(resrho[j], 2) + std::pow(resphi[j], 2);
-//
-//			}
-//
-//		}
-//
-//		rmsVec.push_back(std::sqrt(res2 / (2 * sumNumData)));
-//		std::cout << "  RMS = " << rmsVec[iter] << std::endl;
-//
-//		// Check convergence
-//		if (objectiveFunction < beforeObjectiveFunction) {
-//			double abf(0), abdf(0);
-//			for (int i = 0 ; i < numStation ; i++) {
-//				for (int j = 0 ; j < numDataVec[i] ; j++) {
-//					abf  += std::abs(apparentResistivityVector[i][j]) + std::abs(phaseVector[i][j]);
-//					abdf += std::abs(beforeApparentResistivityVector[i][j] - apparentResistivityVector[i][j]) + std::abs(beforePhaseVector[i][j] - phaseVector[i][j]);
-//				}
-//			}
-//
-//			delta = abdf / abf;
-//			std::cout << "  Delta = " << delta << std::endl;
-//			std::cout << "  Threshold of Delta = " << deltaThreshold << std::endl;
-//
-//			if (delta <= deltaThreshold) {
-//				for (int i = 0 ; i < numStation ; i++) {
-//
-//					auto segment = dxSvd.segment(i * numParameter, numParameter);
-//					std::vector<double> updatedResistivity(numParameter);
-//
-//					for (int j = 0 ; j < numParameter ; j++) {
-//
-//						updatedResistivity[j] = resistivityVectorAll[i][j] + segment(j);
-//
-//						}
-//
-//						resistivityVectorAll[i] = updatedResistivity;
-//
-//					}
-//					break;
-//
-//				} else {
-//					for (int i = 0 ; i < numStation ; i++) {
-//
-//						auto segment = dxSvd.segment(i * numParameter, numParameter);
-//						std::vector<double> updatedResistivity(numParameter);
-//
-//						for (int j = 0 ; j < numParameter ; j++) {
-//
-//							updatedResistivity[j] = resistivityVectorAll[i][j] + segment(j);
-//
-//						}
-//
-//						resistivityVectorAll[i] = updatedResistivity;
-//
-//					}
-//
-//				}
-//
-//			} else {
-//					for (int i = 0 ; i < numStation ; i++) {
-//
-//						for (int j = 0 ; j < numParameter ; j++) {
-//
-//							dxSvd(j + i * numParameter) = 0;
-//
-//						}
-//
-//					}
-//				delta = 1;
-//			}
-//
-//		}
 
 	// Output final result
 	std::cout << "\nRESULT" << std::endl;
@@ -919,11 +764,29 @@ int main () {
                       << std::fixed << std::setprecision(4) 
                       << std::setw(10) << thicknessVector[j] << "  "
                       << std::setw(10) << depthVector[j] << "  "
-                      << std::setw(8) << resistivityVectorAll[i][j] << std::endl;
+                      << std::setw(8) << logRes2res(resistivityVectorAll[i][j]) << std::endl;
 
 		}
 
 	}
+
+	std::ofstream ofs("result_app_resis_and_phase.dat");
+	ofs << numStation << std::endl;
+	for (int i = 0 ; i < numStation ; i++) {
+
+		ofs << i+1 << "    " << numDataVec[i] << "    " << distanceVec[i] << std::endl;
+
+		for (int j = 0 ; j < numDataVec[i] ; j++) {
+			ofs << std::scientific << std::setprecision(10) << freqVec[i][j] << "    "
+				<< std::scientific << std::setprecision(10) << apparentResistivityVector[i][j] << "    "
+				<< std::scientific << std::setprecision(10) << appResWeightVec[i][j] << "    "
+				<< std::scientific << std::setprecision(10) << phaseVector[i][j] << "    "
+				<< std::scientific << std::setprecision(10) << phaseWeightVec[i][j] << std::endl;
+		}
+
+	}
+
+	ofs.close();
 
 	for (int i = 0 ; i < numStation ; i++) {
 
@@ -935,7 +798,7 @@ int main () {
 			ofs << j << ","
                 << thicknessVector[j] << ","
                 << depthVector[j] << ","
-                << resistivityVectorAll[i][j] << std::endl;
+                << logRes2res(resistivityVectorAll[i][j]) << std::endl;
 
 		}
 
@@ -947,7 +810,7 @@ int main () {
 	std::string outputDirectoryName = "./";
 
 	xlimMin = 100000;
-	xlimMax = 0.1;
+	xlimMax = 0.001;
 
 	for (int i = 0 ; i < numStation ; i++) {
 		drawSoundingCurve("AppResis", "ohm.m", freqVec[i], apparentResistivityVector[i], observedAppResVec[i], xlimMin, xlimMax, ylimMin=0.1, ylimMax=10000, i, outputDirectoryName);
