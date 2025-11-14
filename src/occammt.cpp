@@ -619,26 +619,27 @@ void calcNewResistivity(const Eigen::MatrixXd& A, const Eigen::VectorXd& B, cons
 //	Eigen::VectorXd BandH(B.size() + H.size());
 //	BandH << B, H;
 
-	// QR分解
 //	Eigen::VectorXd dxQr = AandC5.colPivHouseholderQr().solve(BandH);
 
 	Eigen::VectorXd dx;
 
 	if (decompositionMethod == "ldlt") {
+	// QR分解
 
-		ofsLog << "Checkpoint 4-3" << std::endl;
-		ofsLog << "(" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
+//		ofsLog << "Checkpoint 4-3" << std::endl;
 	
 		Eigen::MatrixXd AtA = A.transpose() * A;
 		Eigen::MatrixXd CtC = C.transpose() * C;
 		Eigen::VectorXd AtB = A.transpose() * B;
 		Eigen::MatrixXd KtK = AtA + (lambda * lambda) * CtC;
 		dx = KtK.ldlt().solve(AtB);
+
+		ofsLog << "  Solve determinants - ldlt (" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
 	
 	} else if (decompositionMethod == "svd") {
+	// SVD
 
-		ofsLog << "Checkpoint 4-3" << std::endl;
-		ofsLog << "(" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
+//		ofsLog << "Checkpoint 4-3" << std::endl;
 
 		Eigen::MatrixXd lambdaC = lambda * C;
 		Eigen::MatrixXd AandlambdaC(A.rows() + lambdaC.rows(), A.cols());
@@ -650,14 +651,14 @@ void calcNewResistivity(const Eigen::MatrixXd& A, const Eigen::VectorXd& B, cons
 	
 		dx = AandlambdaC.bdcSvd(Eigen::ComputeThinU | Eigen::ComputeThinV).solve(BandH);
 
+		ofsLog << "  Solve determinants - svd (" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
+
 	} else {
 		std::cerr << "Error: Inappropriate word (decompositionMethod) ." << std::endl;
 		return;
 	}
 
-	// SVD
-	ofsLog << "Checkpoint 4-4" << std::endl;
-	ofsLog << "(" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
+//	ofsLog << "Checkpoint 4-4" << std::endl;
 	for (int i = 0 ; i < numStation ; i++) {
 
 		auto segment = dx.segment(i * numParameter, numParameter);
@@ -670,6 +671,8 @@ void calcNewResistivity(const Eigen::MatrixXd& A, const Eigen::VectorXd& B, cons
 		resistivityVectorAllBuf[i] = updatedResistivity;
 
 	}
+
+	ofsLog << "  Update resistivity vector (" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
 
 }
 
@@ -831,7 +834,7 @@ int main () {
 		}
 
 		ofsLog << "\n<-- Iteration: " << iter + 1 << " -->" << std::endl;
-		ofsLog << "Checkpoint 1" << std::endl;
+//		ofsLog << "Checkpoint 1" << std::endl;
 //		ofsLog << "  Current lambda: " << lambda << std::endl;
 
 		// Calculate Jacobian
@@ -844,28 +847,31 @@ int main () {
 			std::cerr << "Error: Inappropriate number (openMpTF) ." << std::endl;
 			return 1;
 		}
-		ofsLog << "Checkpoint 2" << std::endl;
+//		ofsLog << "Checkpoint 2" << std::endl;
+		ofsLog << "  Construct Jacobian (" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
 
 		// Construct Roughness Matrix C
 		Eigen::MatrixXd C = Eigen::MatrixXd::Zero(numParameter * numStation, numParameter * numStation);
 		constructRoughningMatrix(C);
-		ofsLog << "Checkpoint 3" << std::endl;
+//		ofsLog << "Checkpoint 3" << std::endl;
+		ofsLog << "  Construct roughness matrix (" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
 
 		// Construct Residual Vector B
 		Eigen::VectorXd B = Eigen::VectorXd::Zero(sumNumData * 2);
 		constructResidualVector(B, residualApparentResistivityVector, residualPhaseVector);
-		ofsLog << "Checkpoint 4" << std::endl;
+//		ofsLog << "Checkpoint 4" << std::endl;
+		ofsLog << "  Construct residual vector (" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
 
 		// Nonlilnlear Least Squares Method
 		std::vector<std::vector<double>> resistivityVectorAllBuf(numStation);
 		calcNewResistivity(A, B, C, resistivityVectorAllBuf);
-		ofsLog << "Checkpoint 5" << std::endl;
-		ofsLog << "(" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
+//		ofsLog << "Checkpoint 5" << std::endl;
+		ofsLog << "  Construct residual vector (" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
 
 		// Calculate new objective function
 		std::vector<std::vector<double>> newApparentResistivityVector(numStation), newPhaseVector(numStation), newResidualApparentResistivityVector(numStation), newResidualPhaseVector(numStation);
-		ofsLog << "Checkpoint 6" << std::endl;
-		ofsLog << "(" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
+//		ofsLog << "Checkpoint 6" << std::endl;
+		ofsLog << "  Calculate new objective function (" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
 
 		if (openMpTF == 0) {
 			std::tie(newApparentResistivityVector, newPhaseVector, newResidualApparentResistivityVector, newResidualPhaseVector) = calcApparentResistivityAndPhase        (newApparentResistivityVector, newPhaseVector, newResidualApparentResistivityVector, newResidualPhaseVector, resistivityVectorAllBuf);
@@ -876,7 +882,8 @@ int main () {
 			return 1;
 		}
 
-		ofsLog << "Checkpoint 7" << std::endl;
+//		ofsLog << "Checkpoint 7" << std::endl;
+		ofsLog << "  Calculate new apparent resistivity and phase data (" << elapsedTime(clockStart, clockNow()) << " msec)" << std::endl;
 
 		double beforeObjectiveFunction = objectiveFunction;
 		objectiveFunction = calcObjectiveFunction(newResidualApparentResistivityVector, newResidualPhaseVector);
